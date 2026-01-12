@@ -3,6 +3,7 @@ const simpleParser = require('mailparser').simpleParser;
 const fs = require('fs-extra');
 const path = require('path');
 const pdfParse = require('pdf-parse');
+const Tesseract = require('tesseract.js');
 require('dotenv').config();
 
 const Email = require('../models/Resume'); // File is Resume.js but exports Email model
@@ -346,14 +347,67 @@ async function processEmailContent(emailData, uid, io) {
             // Read the saved PDF and parse it
             console.log(`  Parsing PDF to extract text...`);
             const pdfBuffer = await fs.readFile(pdfPath);
-            const pdfData = await pdfParse(pdfBuffer);
-            console.log(`  ✅ PDF parsed successfully, extracted ${pdfData.text.length} characters`);
+            let pdfData = null;
+            let extractedText = '';
+            
+            try {
+              // First, try pdf-parse (works for text-based PDFs)
+              pdfData = await pdfParse(pdfBuffer);
+              extractedText = pdfData.text || '';
+              console.log(`  ✅ PDF parsed with pdf-parse, extracted ${extractedText.length} characters`);
+            } catch (parseError) {
+              console.log(`  ⚠️  pdf-parse failed: ${parseError.message}`);
+              console.log(`  Will try OCR for scanned PDF...`);
+            }
+            
+            // If pdf-parse didn't extract text or extracted very little, try OCR
+            if (!extractedText || extractedText.trim().length < 50) {
+              console.log(`  🔍 PDF appears to be scanned or image-based, attempting OCR...`);
+              console.log(`  ⚠️  Note: OCR works best when PDF pages are converted to images first.`);
+              console.log(`  📸 Running OCR on PDF directly (this may take a moment)...`);
+              
+              try {
+                // Try to use Tesseract.js for OCR
+                // Note: Tesseract.js works best with images. For PDFs, consider converting pages to images first
+                // using pdf-img-convert or similar (requires native dependencies on Windows)
+                const { data: { text: ocrText } } = await Tesseract.recognize(pdfBuffer, 'eng', {
+                  logger: m => {
+                    if (m.status === 'recognizing text') {
+                      console.log(`  OCR progress: ${Math.round(m.progress * 100)}%`);
+                    }
+                  }
+                });
+                
+                if (ocrText && ocrText.trim().length > 0) {
+                  extractedText = ocrText;
+                  console.log(`  ✅ OCR completed successfully, extracted ${extractedText.length} characters`);
+                  
+                  // Create a mock pdfData object for consistency
+                  pdfData = { text: extractedText };
+                } else {
+                  console.log(`  ⚠️  OCR completed but no text was extracted`);
+                  console.log(`  💡 Tip: For scanned PDFs, consider converting PDF pages to images first for better OCR accuracy`);
+                }
+              } catch (ocrError) {
+                console.error(`  ❌ OCR failed: ${ocrError.message}`);
+                console.error(`  💡 Tip: For better OCR support, install pdf-img-convert to convert PDF pages to images first`);
+                console.error(`  💡 Alternative: Use a cloud OCR service for production-grade scanned PDF processing`);
+                // Continue with whatever text we have (even if empty)
+              }
+            }
+            
+            if (!extractedText || extractedText.trim().length === 0) {
+              console.log(`  ⚠️  Could not extract text from PDF (neither pdf-parse nor OCR worked)`);
+              extractedText = '';
+            }
             
             // Extract structured data from PDF (name, email, contact, DOB)
             console.log(`  Extracting structured data from PDF...`);
-            console.log(`  PDF text preview (first 500 chars): ${pdfData.text.substring(0, 500)}`);
+            if (extractedText.length > 0) {
+              console.log(`  PDF text preview (first 500 chars): ${extractedText.substring(0, 500)}`);
+            }
             
-            const extractedData = extractResumeData(pdfData.text);
+            const extractedData = extractResumeData(extractedText);
             
             console.log(`  ✅ Extracted data from PDF:`);
             console.log(`     - Name: "${extractedData.name || 'Not found'}"`);
@@ -369,7 +423,7 @@ async function processEmailContent(emailData, uid, io) {
               dateOfBirth: extractedData.dateOfBirth || '',
               pdfPath: pdfPath, // Store the full path to the saved PDF
               pdfFilename: pdfFilename, // Store just the filename
-              rawText: pdfData.text.substring(0, 5000) // Store first 5000 chars for reference
+              rawText: extractedText.substring(0, 5000) // Store first 5000 chars for reference
             };
             
             // Log what will be saved

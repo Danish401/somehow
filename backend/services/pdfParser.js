@@ -120,52 +120,96 @@ function extractResumeData(text) {
 
   // ========== EXTRACT EMAIL ==========
   console.log('🔍 Extracting email...');
-  const emailPatterns = [
-    /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/g,
-    /email\s*[:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
-    /e-mail\s*[:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
-    /mail\s*[:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi
-  ];
   
-  for (const pattern of emailPatterns) {
-    const matches = originalText.match(pattern);
-    if (matches && matches.length > 0) {
-      // Extract just the email address (remove "email:" prefix if present)
-      for (const match of matches) {
-        const emailMatch = match.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-        if (emailMatch && emailMatch[1]) {
-          data.email = emailMatch[1].toLowerCase();
-          console.log(`✓ Email found: "${data.email}"`);
-          break;
+  // Comprehensive email regex - handles all valid email formats
+  const emailRegex = /\b[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}\b/g;
+  
+  // Try to find all email matches in the text
+  let emailMatches = originalText.match(emailRegex);
+  
+  if (emailMatches && emailMatches.length > 0) {
+    // Filter out common false positives and prioritize personal emails
+    emailMatches = emailMatches
+      .map(email => email.toLowerCase().trim())
+      .filter(email => {
+        // Filter out common false positives
+        const falsePositives = ['example.com', 'email.com', 'test.com', 'domain.com'];
+        const domain = email.split('@')[1];
+        return !falsePositives.some(fp => domain.includes(fp));
+      });
+    
+    if (emailMatches.length > 0) {
+      // Use the first valid email (could be enhanced to prioritize personal emails over company)
+      data.email = emailMatches[0];
+      console.log(`✓ Email found: "${data.email}"`);
+    }
+  }
+  
+  // If still not found, try patterns with labels
+  if (!data.email) {
+    const emailWithLabelPatterns = [
+      /(?:email|e-mail|mail)\s*[:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+      /(?:email|e-mail|mail)\s*[=]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi
+    ];
+    
+    for (const pattern of emailWithLabelPatterns) {
+      const matches = originalText.match(pattern);
+      if (matches && matches.length > 0) {
+        for (const match of matches) {
+          const emailMatch = match.match(emailRegex);
+          if (emailMatch && emailMatch[0]) {
+            data.email = emailMatch[0].toLowerCase().trim();
+            console.log(`✓ Email found (with label): "${data.email}"`);
+            break;
+          }
         }
+        if (data.email) break;
       }
-      if (data.email) break;
     }
   }
 
   if (!data.email) {
     console.log('❌ Email not found');
+    console.log('  Attempted patterns: standard email regex, labeled patterns');
   }
 
   // ========== EXTRACT CONTACT NUMBER ==========
   console.log('🔍 Extracting contact number...');
   
-  // Look for phone patterns with labels first
+  // Comprehensive phone number patterns - handles various formats
+  const phonePatterns = [
+    // International format: +1-234-567-8900, +91 1234567890
+    /\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g,
+    // US format: (123) 456-7890, 123-456-7890, 123.456.7890
+    /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
+    // Indian format: +91 98765 43210, 98765 43210, 9876543210
+    /\+?91[-.\s]?\d{5}[-.\s]?\d{5}/g,
+    // Generic 10-15 digit numbers
+    /\b\d{10,15}\b/g,
+    // Numbers with spaces: 123 456 7890
+    /\d{3,4}\s+\d{3,4}\s+\d{3,4}/g
+  ];
+  
+  // Look for phone patterns with labels first (more reliable)
   const phoneWithLabelPatterns = [
-    /(?:phone|mobile|contact|tel|telephone|cell)\s*[:]?\s*([+\d\s\-()]+)/gi,
-    /(?:phone|mobile|contact|tel|telephone|cell)\s*[:]?\s*(\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9})/gi
+    /(?:phone|mobile|contact|tel|telephone|cell|mob|whatsapp)\s*[:=]?\s*([+\d\s\-().]+)/gi,
+    /(?:ph|mob|tel)\s*[:=]?\s*([+\d\s\-().]+)/gi
   ];
   
   for (const pattern of phoneWithLabelPatterns) {
     const matches = originalText.match(pattern);
     if (matches && matches.length > 0) {
       for (const match of matches) {
-        // Extract digits and + from the match
-        const cleaned = match.replace(/[^\d+]/g, '');
-        if (cleaned.length >= 10) {
-          data.contactNumber = cleaned;
-          console.log(`✓ Contact found (with label): "${data.contactNumber}"`);
-          break;
+        // Extract just the phone number part
+        const phoneMatch = match.match(/[+\d\s\-().]+/);
+        if (phoneMatch) {
+          const cleaned = phoneMatch[0].replace(/[^\d+]/g, '');
+          // Phone numbers should be 10-15 digits (including country code)
+          if (cleaned.length >= 10 && cleaned.length <= 15) {
+            data.contactNumber = cleaned;
+            console.log(`✓ Contact found (with label): "${data.contactNumber}" (from: "${match}")`);
+            break;
+          }
         }
       }
       if (data.contactNumber) break;
@@ -174,19 +218,30 @@ function extractResumeData(text) {
 
   // If not found, look for standalone phone numbers
   if (!data.contactNumber) {
-    const phonePatterns = [
-      /\+?\d{1,4}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g,
-      /\b\d{10,15}\b/g
-    ];
-    
     for (const pattern of phonePatterns) {
       const matches = originalText.match(pattern);
       if (matches && matches.length > 0) {
+        // Filter matches to find the most likely phone number
         for (const match of matches) {
           const cleaned = match.replace(/[^\d+]/g, '');
+          
+          // Phone numbers should be 10-15 digits
           if (cleaned.length >= 10 && cleaned.length <= 15) {
+            // Skip if it looks like a date, year, or other number
+            // Don't accept numbers that are clearly years (1900-2099)
+            if (cleaned.length === 4 && /^[12]\d{3}$/.test(cleaned)) {
+              continue; // Skip years
+            }
+            
+            // Skip if it's part of an email address
+            const beforeMatch = originalText.substring(Math.max(0, originalText.indexOf(match) - 5), originalText.indexOf(match));
+            const afterMatch = originalText.substring(originalText.indexOf(match) + match.length, Math.min(originalText.length, originalText.indexOf(match) + match.length + 5));
+            if (beforeMatch.includes('@') || afterMatch.includes('@') || beforeMatch.includes('.') && afterMatch.includes('.')) {
+              continue; // Skip if it's part of an email
+            }
+            
             data.contactNumber = cleaned;
-            console.log(`✓ Contact found (standalone): "${data.contactNumber}"`);
+            console.log(`✓ Contact found (standalone): "${data.contactNumber}" (from: "${match}")`);
             break;
           }
         }
@@ -197,6 +252,7 @@ function extractResumeData(text) {
 
   if (!data.contactNumber) {
     console.log('❌ Contact number not found');
+    console.log('  Attempted patterns: labeled patterns, international formats, US formats, generic patterns');
   }
 
   // ========== EXTRACT DATE OF BIRTH ==========
